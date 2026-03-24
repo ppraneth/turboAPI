@@ -34,17 +34,21 @@ class Database:
         self._connect()
 
     def _connect(self):
-        """Initialize connection — tries Zig native, falls back to psycopg2/psycopg."""
+        """Initialize connection. Checks for Zig native raw query path first."""
         self._native = None
+        self._native_raw = False
+        self._native_exec_many = False
         self._fallback_engine = None
 
-        # Try Zig native pool
+        # Try Zig native pool + raw query path
         try:
             from turboapi import turbonet
 
             if hasattr(turbonet, "_db_configure"):
                 turbonet._db_configure(self.conn_string, self.pool_size)
                 self._native = turbonet
+                self._native_raw = hasattr(turbonet, "_db_query_raw")
+                self._native_exec_many = hasattr(turbonet, "_db_exec_many_raw")
         except (ImportError, Exception):
             pass
 
@@ -109,8 +113,20 @@ class Database:
             return self._execute_native(sql, params or [])
         return self._execute_fallback(sql, params or [])
 
+    def execute_many(self, sql: str, rows: list[list] | None = None) -> int:
+        """Execute the same statement for many rows and return affected row count."""
+        rows = rows or []
+        if self._native and self._native_exec_many:
+            return self._native._db_exec_many_raw(sql, rows)
+        total = 0
+        for row in rows:
+            total += self.execute(sql, row)
+        return total
+
     def _query_native(self, sql: str, params: list) -> list[dict]:
-        """Query via Zig-native pg.zig or Python fallback."""
+        """Query via Zig-native pg.zig directly (no JSON, returns Python dicts)."""
+        if self._native_raw:
+            return self._native._db_query_raw(sql, params)
         if self._fallback_engine:
             return self._query_fallback(sql, params)
         raise NotImplementedError(

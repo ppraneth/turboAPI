@@ -6,6 +6,7 @@ Phase 3: Handler classification for fast dispatch (bypass Python enhanced wrappe
 
 import inspect
 import json
+import os
 from typing import Any, get_origin
 import asyncio
 try:
@@ -282,8 +283,6 @@ class ZigIntegratedTurboAPI(TurboAPI):
         print(f"{ROCKET} ZigIntegratedTurboAPI created - direct Zig integration")
 
         # Check environment variable to disable rate limiting for benchmarking
-        import os
-
         if os.getenv("TURBO_DISABLE_RATE_LIMITING") == "1":
             self.configure_rate_limiting(enabled=False)
             print("[CONFIG] Rate limiting disabled via environment variable")
@@ -397,14 +396,15 @@ class ZigIntegratedTurboAPI(TurboAPI):
         self._db_config = (conn_string, pool_size)
         print(f"{CHECK_MARK} DB configured: pool_size={pool_size}")
 
-    def db_get(self, path: str, *, table: str, pk: str = "id"):
+    def db_get(self, path: str, *, table: str, pk: str = "id", columns: list[str] | None = None):
         """Zig-native SELECT by primary key. No Python, no GIL."""
         import re
 
         params = re.findall(r"\{([^}]+)\}", path)
         pk_param = params[0] if params else pk
+        column_str = ",".join(columns) if columns else ""
         self._db_routes = getattr(self, "_db_routes", [])
-        self._db_routes.append(("GET", path, "select_one", table, pk, pk_param, ""))
+        self._db_routes.append(("GET", path, "select_one", table, pk, pk_param, column_str))
         print(f"{CHECK_MARK} [db:select_one] GET {path} -> {table}.{pk}")
 
         def decorator(func):
@@ -412,10 +412,11 @@ class ZigIntegratedTurboAPI(TurboAPI):
 
         return decorator
 
-    def db_list(self, path: str, *, table: str):
+    def db_list(self, path: str, *, table: str, columns: list[str] | None = None):
         """Zig-native SELECT * with ?limit=N&offset=M. No Python, no GIL."""
+        column_str = ",".join(columns) if columns else ""
         self._db_routes = getattr(self, "_db_routes", [])
-        self._db_routes.append(("GET", path, "select_list", table, "", "", ""))
+        self._db_routes.append(("GET", path, "select_list", table, "", "", column_str))
         print(f"{CHECK_MARK} [db:select_list] GET {path} -> {table}")
 
         def decorator(func):
@@ -582,7 +583,8 @@ class ZigIntegratedTurboAPI(TurboAPI):
                 )
 
             # Enable response caching for noargs handlers (auto-cache after first call)
-            if hasattr(self.zig_server, "enable_response_cache"):
+            # Disable with TURBO_DISABLE_CACHE=1 (e.g. for TFB compliance)
+            if not os.environ.get("TURBO_DISABLE_CACHE") and hasattr(self.zig_server, "enable_response_cache"):
                 self.zig_server.enable_response_cache()
 
             native_count = len(getattr(self, "_native_routes", []))

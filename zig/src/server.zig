@@ -675,6 +675,14 @@ pub fn server_add_middleware(_: ?*c.PyObject, _: ?*c.PyObject) callconv(.c) ?*c.
 // Subsequent calls serve from cache — zero Python, zero GIL, single writeAll.
 
 pub fn server_enable_response_cache(_: ?*c.PyObject, _: ?*c.PyObject) callconv(.c) ?*c.PyObject {
+    // Check if response cache is disabled via env var
+    if (std.posix.getenv("TURBO_DISABLE_RESPONSE_CACHE")) |val| {
+        if (std.mem.eql(u8, val, "1") or std.mem.eql(u8, val, "true")) {
+            cache_noargs_responses = false;
+            std.debug.print("[CACHE] Response caching DISABLED via TURBO_DISABLE_RESPONSE_CACHE\n", .{});
+            return py.pyNone();
+        }
+    }
     cache_noargs_responses = true;
     std.debug.print("[CACHE] Response caching enabled for noargs handlers\n", .{});
     return py.pyNone();
@@ -708,11 +716,13 @@ fn renderResponse(status: u16, content_type: []const u8, body: []const u8) ?[]co
 
 // ── Thread pool for connection handling ─────────────────────────────────────
 
-const POOL_SIZE = 24; // 2x 12-core M-series; overridden at runtime below if needed
+const MAX_POOL_SIZE = 128;
+const DEFAULT_POOL_SIZE = 24;
 
 const ConnectionPool = struct {
     queue: Queue,
-    threads: [POOL_SIZE]std.Thread = undefined,
+    threads: [MAX_POOL_SIZE]std.Thread = undefined,
+    thread_count: usize = 0,
 
     const Queue = struct {
         items: [4096]std.net.Stream = undefined,
@@ -748,9 +758,10 @@ const ConnectionPool = struct {
         }
     };
 
-    fn init(self: *ConnectionPool) void {
+    fn init(self: *ConnectionPool, thread_count: usize) void {
         self.queue = .{};
-        for (0..POOL_SIZE) |i| {
+        self.thread_count = @min(thread_count, MAX_POOL_SIZE);
+        for (0..self.thread_count) |i| {
             self.threads[i] = std.Thread.spawn(.{}, workerLoop, .{&self.queue}) catch @panic("thread spawn");
         }
     }
@@ -791,12 +802,18 @@ pub fn server_run(_: ?*c.PyObject, _: ?*c.PyObject) callconv(.c) ?*c.PyObject {
     // Workers need this to create their own PyThreadState.
     py_interp = py.PyInterpreterState_Get();
 
+    var thread_count: usize = DEFAULT_POOL_SIZE;
+    if (std.posix.getenv("TURBO_THREAD_POOL_SIZE")) |val| {
+        thread_count = std.fmt.parseInt(usize, val, 10) catch DEFAULT_POOL_SIZE;
+        if (thread_count == 0) thread_count = DEFAULT_POOL_SIZE;
+    }
+
     // Start thread pool (workers create their tstates after this point,
     // but py_interp is set before SaveThread so there's no race).
-    pool.init();
+    pool.init(thread_count);
 
     std.debug.print("🚀 TurboNet-Zig server listening on {s}:{d}\n", .{ server_host, server_port });
-    std.debug.print("🎯 Zig HTTP core active – {d}-thread pool, per-worker tstate!\n", .{POOL_SIZE});
+    std.debug.print("🎯 Zig HTTP core active – {d}-thread pool, per-worker tstate!\n", .{pool.thread_count});
 
     // Release the GIL — workers acquire it per-request via AcquireThread.
     const save = py.PyEval_SaveThread();

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "turboapi"
-version = "1.0.16"
+version = "1.0.19"
 description = "FastAPI-compatible web framework with Zig HTTP core — 20x faster with Python 3.14 free-threading"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -62,6 +62,7 @@ turboapi = ["*.so", "*.dylib", "*.pyd"]
 [tool.ruff]
 target-version = "py314"
 line-length = 100
+extend-exclude = ["faster-boto3/tests"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "C4", "UP"]

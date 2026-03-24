@@ -8,7 +8,7 @@ import pytest
 def test_import():
     from turbopg import Database, __version__
 
-    assert __version__ == "0.1.0"
+    assert __version__ == "0.1.1"
     assert Database is not None
 
 
@@ -143,6 +143,7 @@ def test_query_no_backend_raises():
 
     db = object.__new__(Database)
     db._native = True  # pretend native exists
+    db._native_raw = False  # no raw query path
     db._fallback_engine = None  # but no fallback
 
     with pytest.raises(NotImplementedError, match="psycopg2-binary"):
@@ -154,6 +155,7 @@ def test_execute_no_backend_raises():
 
     db = object.__new__(Database)
     db._native = True
+    db._native_raw = False
     db._fallback_engine = None
 
     with pytest.raises(NotImplementedError, match="psycopg2-binary"):
